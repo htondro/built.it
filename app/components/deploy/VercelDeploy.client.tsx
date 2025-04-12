@@ -54,7 +54,7 @@ export function useVercelDeploy() {
         actionId,
         action: {
           type: 'build' as const,
-          content: 'npm run build',
+          content: 'pnpm run build',
         },
       };
 

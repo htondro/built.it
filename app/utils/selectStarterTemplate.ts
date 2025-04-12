@@ -62,7 +62,7 @@ Important: Provide only the selection tags in your response, no additional text.
 MOST IMPORTANT: YOU DONT HAVE TIME TO THINK JUST START RESPONDING BASED ON HUNCH 
 `;
 
-const templates: Template[] = STARTER_TEMPLATES.filter((t) => !t.name.includes('shadcn'));
+const templates: Template[] = STARTER_TEMPLATES;
 
 const parseSelectedTemplate = (llmOutput: string): { template: string; title: string } | null => {
   try {
@@ -74,7 +74,17 @@ const parseSelectedTemplate = (llmOutput: string): { template: string; title: st
       return null;
     }
 
-    return { template: templateNameMatch[1].trim(), title: titleMatch?.[1].trim() || 'Untitled Project' };
+    const templateName = templateNameMatch[1].trim();
+
+    // Special handling for Next.js requests
+    if (templateName.toLowerCase().includes('nextjs') || templateName.toLowerCase().includes('next.js')) {
+      return {
+        template: 'bolt-nextjs-shadcn',
+        title: titleMatch?.[1].trim() || 'Next.js Application',
+      };
+    }
+
+    return { template: templateName, title: titleMatch?.[1].trim() || 'Untitled Project' };
   } catch (error) {
     console.error('Error parsing template selection:', error);
     return null;
@@ -127,6 +137,8 @@ const getGitHubRepoContent = async (
     // Add your GitHub token if needed
     if (token) {
       headers.Authorization = 'Bearer ' + token;
+    } else {
+      console.warn('No GitHub token found. Using unauthenticated requests which may be rate limited.');
     }
 
     // Fetch contents of the path
@@ -135,7 +147,8 @@ const getGitHubRepoContent = async (
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`GitHub API error: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)}`);
     }
 
     const data: any = await response.json();
@@ -166,6 +179,14 @@ const getGitHubRepoContent = async (
           const fileResponse = await fetch(item.url, {
             headers,
           });
+
+          if (!fileResponse.ok) {
+            const errorData = await fileResponse.json().catch(() => ({}));
+            throw new Error(
+              `GitHub API error fetching file: ${fileResponse.status} ${fileResponse.statusText} - ${JSON.stringify(errorData)}`,
+            );
+          }
+
           const fileData: any = await fileResponse.json();
           const content = atob(fileData.content); // Decode base64 content
 
@@ -191,51 +212,55 @@ const getGitHubRepoContent = async (
 };
 
 export async function getTemplates(templateName: string, title?: string) {
-  const template = STARTER_TEMPLATES.find((t) => t.name == templateName);
+  try {
+    const template = STARTER_TEMPLATES.find((t) => t.name === templateName);
 
-  if (!template) {
-    return null;
-  }
+    if (!template) {
+      throw new Error(`Template ${templateName} not found in available templates`);
+    }
 
-  const githubRepo = template.githubRepo;
-  const files = await getGitHubRepoContent(githubRepo);
+    const githubRepo = template.githubRepo;
+    console.log(`Fetching template from GitHub repository: ${githubRepo}`);
 
-  let filteredFiles = files;
+    const files = await getGitHubRepoContent(githubRepo);
+    console.log(`Successfully fetched ${files.length} files from template`);
 
-  /*
-   * ignoring common unwanted files
-   * exclude    .git
-   */
-  filteredFiles = filteredFiles.filter((x) => x.path.startsWith('.git') == false);
+    let filteredFiles = files;
 
-  // exclude    lock files
-  const comminLockFiles = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
-  filteredFiles = filteredFiles.filter((x) => comminLockFiles.includes(x.name) == false);
+    /*
+     * ignoring common unwanted files
+     * exclude    .git
+     */
+    filteredFiles = filteredFiles.filter((x) => x.path.startsWith('.git') == false);
 
-  // exclude    .bolt
-  filteredFiles = filteredFiles.filter((x) => x.path.startsWith('.bolt') == false);
+    // exclude    lock files
+    const comminLockFiles = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
+    filteredFiles = filteredFiles.filter((x) => comminLockFiles.includes(x.name) == false);
 
-  // check for ignore file in .bolt folder
-  const templateIgnoreFile = files.find((x) => x.path.startsWith('.bolt') && x.name == 'ignore');
+    // exclude    .bolt
+    filteredFiles = filteredFiles.filter((x) => x.path.startsWith('.bolt') == false);
 
-  const filesToImport = {
-    files: filteredFiles,
-    ignoreFile: [] as typeof filteredFiles,
-  };
+    // check for ignore file in .bolt folder
+    const templateIgnoreFile = files.find((x) => x.path.startsWith('.bolt') && x.name == 'ignore');
 
-  if (templateIgnoreFile) {
-    // redacting files specified in ignore file
-    const ignorepatterns = templateIgnoreFile.content.split('\n').map((x) => x.trim());
-    const ig = ignore().add(ignorepatterns);
+    const filesToImport = {
+      files: filteredFiles,
+      ignoreFile: [] as typeof filteredFiles,
+    };
 
-    // filteredFiles = filteredFiles.filter(x => !ig.ignores(x.path))
-    const ignoredFiles = filteredFiles.filter((x) => ig.ignores(x.path));
+    if (templateIgnoreFile) {
+      // redacting files specified in ignore file
+      const ignorepatterns = templateIgnoreFile.content.split('\n').map((x) => x.trim());
+      const ig = ignore().add(ignorepatterns);
 
-    filesToImport.files = filteredFiles;
-    filesToImport.ignoreFile = ignoredFiles;
-  }
+      // filteredFiles = filteredFiles.filter(x => !ig.ignores(x.path))
+      const ignoredFiles = filteredFiles.filter((x) => ig.ignores(x.path));
 
-  const assistantMessage = `
+      filesToImport.files = filteredFiles;
+      filesToImport.ignoreFile = ignoredFiles;
+    }
+
+    const assistantMessage = `
 <boltArtifact id="imported-files" title="${title || 'Importing Starter Files'}" type="bundled">
 ${filesToImport.files
   .map(
@@ -247,23 +272,23 @@ ${file.content}
   .join('\n')}
 </boltArtifact>
 `;
-  let userMessage = ``;
-  const templatePromptFile = files.filter((x) => x.path.startsWith('.bolt')).find((x) => x.name == 'prompt');
+    let userMessage = ``;
+    const templatePromptFile = files.filter((x) => x.path.startsWith('.bolt')).find((x) => x.name == 'prompt');
 
-  if (templatePromptFile) {
-    userMessage = `
+    if (templatePromptFile) {
+      userMessage = `
 TEMPLATE INSTRUCTIONS:
 ${templatePromptFile.content}
 
 IMPORTANT: Dont Forget to install the dependencies before running the app
 ---
 `;
-  }
+    }
 
-  if (filesToImport.ignoreFile.length > 0) {
-    userMessage =
-      userMessage +
-      `
+    if (filesToImport.ignoreFile.length > 0) {
+      userMessage =
+        userMessage +
+        `
 STRICT FILE ACCESS RULES - READ CAREFULLY:
 
 The following files are READ-ONLY and must never be modified:
@@ -287,9 +312,9 @@ Any attempt to modify these protected files will result in immediate termination
 If you need to make changes to functionality, create new files instead of modifying the protected ones listed above.
 ---
 `;
-  }
+    }
 
-  userMessage += `
+    userMessage += `
 ---
 template import is done, and you can now use the imported files,
 edit only the files that need to be changed, and you can create new files as needed.
@@ -298,8 +323,12 @@ NO NOT EDIT/WRITE ANY FILES THAT ALREADY EXIST IN THE PROJECT AND DOES NOT NEED 
 Now that the Template is imported please continue with my original request
 `;
 
-  return {
-    assistantMessage,
-    userMessage,
-  };
+    return {
+      assistantMessage,
+      userMessage,
+    };
+  } catch (error) {
+    console.error('Error in getTemplates:', error);
+    throw error;
+  }
 }

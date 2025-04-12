@@ -34,15 +34,15 @@ export async function detectProjectCommands(files: FileContent[]): Promise<Proje
       if (availableCommand) {
         return {
           type: 'Node.js',
-          setupCommand: `npm install`,
-          startCommand: `npm run ${availableCommand}`,
-          followupMessage: `Found "${availableCommand}" script in package.json. Running "npm run ${availableCommand}" after installation.`,
+          setupCommand: `pnpm install`,
+          startCommand: `pnpm run ${availableCommand}`,
+          followupMessage: `Found "${availableCommand}" script in package.json. Running "pnpm run ${availableCommand}" after installation.`,
         };
       }
 
       return {
         type: 'Node.js',
-        setupCommand: 'npm install',
+        setupCommand: 'pnpm install',
         followupMessage:
           'Would you like me to inspect package.json to determine the available scripts for running this project?',
       };
